@@ -158,6 +158,69 @@ h1 {
 details.panel { transition: border-color .2s ease; }
 details.panel:hover { border-color: rgba(77,102,138,.85); }
 
+/* =========================================================================
+   ФАЙЛОВІ ІНПУТИ: замість голого системного контролу — стилізована зона
+   =========================================================================
+   Стосується вибору Excel-файлу («Розклад з Excel») і PDF у матеріалах —
+   обидва мають клас .file-input. Раніше вибір Excel-файлу рендерився без
+   цього класу і виглядав як голий системний контрол платформи; тепер це
+   акуратна картка-дропзона з кнопкою в стилі застосунку та плавним ефектом
+   при наведенні й фокусі.
+   ========================================================================= */
+.file-input {
+  position: relative;
+  transition: border-color .2s ease, background .2s ease, box-shadow .2s ease, transform .15s ease;
+  cursor: pointer;
+}
+.file-input:hover { border-color: var(--blue) !important; background: #0d1826; }
+.file-input:focus-visible { box-shadow: var(--focus-ring, 0 0 0 3px rgba(70,182,255,.35)); }
+.file-input:active { transform: scale(.995); }
+.file-input::file-selector-button {
+  transition: filter .2s ease, transform .15s ease, box-shadow .2s ease;
+  cursor: pointer;
+}
+.file-input:hover::file-selector-button { filter: brightness(1.12); box-shadow: 0 0 16px rgba(70,182,255,.35); }
+.file-input:active::file-selector-button { transform: scale(.95); }
+
+/* =========================================================================
+   ІНСТРУМЕНТИ ТАБЛИЦІ «ГРАФІК НАВЧАННЯ»: живі кнопки й акуратний скрол
+   =========================================================================
+   «+ Додати рядок» / «Очистити семестр» були голими текстовими
+   посиланнями (.link-button) — тепер це компактні кнопки-пігулки з
+   іконкою, у стилі решти застосунку, плюс тонкий кастомний скролбар і
+   легке "згасання" країв таблиці, щоб було видно, що вона прокручується.
+   ========================================================================= */
+.academic-actions { gap: 8px; }
+.academic-actions .link-button {
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 13px;
+  background: #101827; color: var(--muted);
+  display: inline-flex; align-items: center; gap: 6px;
+  transition: .2s ease;
+}
+.academic-actions .academic-add-row {
+  color: var(--green); border-color: rgba(66,239,173,.35); background: rgba(66,239,173,.06);
+}
+.academic-actions .academic-add-row:hover {
+  border-color: var(--green); color: #baffe2; background: rgba(66,239,173,.14);
+  box-shadow: 0 0 16px rgba(66,239,173,.2); transform: translateY(-1px);
+}
+.academic-actions .academic-clear-semester:hover {
+  border-color: #ff8a8a; color: #ffb3b3; background: rgba(255,111,111,.1);
+  box-shadow: 0 0 16px rgba(255,111,111,.16); transform: translateY(-1px);
+}
+.academic-actions .link-button:active { transform: translateY(0) scale(.97); }
+
+.academic-scroll {
+  scrollbar-width: thin; scrollbar-color: rgba(70,182,255,.45) transparent;
+  scroll-behavior: smooth;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 14px), transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 14px), transparent);
+}
+.academic-scroll::-webkit-scrollbar { height: 7px; }
+.academic-scroll::-webkit-scrollbar-track { background: transparent; }
+.academic-scroll::-webkit-scrollbar-thumb { background: rgba(70,182,255,.4); border-radius: 99px; }
+.academic-scroll::-webkit-scrollbar-thumb:hover { background: rgba(70,182,255,.65); }
+
 @media (prefers-reduced-motion: reduce) {
   .system span, .empty span, .academic-empty span, .pair-timer .timer-empty span { animation: none; }
 }

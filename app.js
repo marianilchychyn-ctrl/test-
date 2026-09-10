@@ -583,7 +583,7 @@
     $('#modal-kicker').textContent = 'РОЗКЛАД З EXCEL';
     $('#modal-title').textContent = 'Імпорт розкладу за групою';
     $('#entry-form').dataset.type = 'excelImport';
-    $('#entry-form').innerHTML = `<div class="form-grid"><div class="field full"><p style="color:var(--muted);font-size:13px;margin:0 0 10px;line-height:1.5">Обери Excel-файл з розкладом свого факультету. Після завантаження оберемо твою групу зі списку.</p><input type="file" id="excel-step-file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></div><p id="excel-status" style="color:var(--muted);font-size:12px;margin-top:8px"></p></div>`;
+    $('#entry-form').innerHTML = `<div class="form-grid"><div class="field full"><p style="color:var(--muted);font-size:13px;margin:0 0 10px;line-height:1.5">Обери Excel-файл з розкладом свого факультету. Після завантаження оберемо твою групу зі списку.</p><input type="file" id="excel-step-file" class="file-input" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></div><p id="excel-status" style="color:var(--muted);font-size:12px;margin-top:8px"></p></div>`;
     $('#excel-step-file').addEventListener('change', async event => {
       const file = event.target.files[0]; if (!file) return;
       $('#excel-status').textContent = 'Читаю файл…';
