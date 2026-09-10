@@ -194,6 +194,15 @@
     return `<div class="lesson-row" data-edit-lesson="${item.id}" title="Клацни, щоб редагувати"><span class="time">${safe(item.time)}</span><div class="info"><b>${safe(item.title)}</b><small>${safe(item.place)}</small></div><span class="type ${kindClass(item.kind)}">${safe(item.kind)}</span></div>`;
   }
   function kindClass(kind) { return kind === 'Практика' ? 'practice' : kind === 'Лабораторна' ? 'lab' : ''; }
+  // Розбиває час пари на початок/кінець для бейджа в картці розкладу — окремими
+  // рядками, а не одним довгим рядком, щоб час завжди влазив у свою колонку
+  // й ніколи не наїжджав на назву пари.
+  function timeBadge(text) {
+    const matches = [...String(text || '').matchAll(/(\d{1,2}):(\d{2})/g)];
+    if (matches.length >= 2) return `<span class="t-start">${matches[0][0]}</span><span class="t-sep" aria-hidden="true"></span><span class="t-end">${matches[1][0]}</span>`;
+    if (matches.length === 1) return `<span class="t-start t-solo">${matches[0][0]}</span>`;
+    return `<span class="t-start t-solo">${safe(text)}</span>`;
+  }
 
   function renderSchedule() {
     $$('.week-choice:not(.duration-choice):not(.semester-choice):not(.share-format-choice)').forEach(button => {
@@ -215,7 +224,7 @@
       return;
     }
     const lessons = data.lessons.filter(item => item.day === selectedDay && (!item.week || item.week === 'both' || item.week === selectedWeek)).sort((a, b) => a.time.localeCompare(b.time));
-    board.innerHTML = lessons.map(item => `<article class="schedule-card" data-edit-lesson="${item.id}" title="Клацни, щоб редагувати"><span class="time">${safe(item.time)}</span><div><b>${safe(item.title)}</b><p>${safe(item.place)}</p></div><span class="type ${kindClass(item.kind)}">${safe(item.kind)}</span><button class="delete" data-remove-lesson="${item.id}" title="Видалити" aria-label="Видалити пару «${safe(item.title)}»">×</button></article>`).join('');
+    board.innerHTML = lessons.map(item => `<article class="schedule-card ${kindClass(item.kind)}" data-edit-lesson="${item.id}" title="Клацни, щоб редагувати"><div class="time-badge">${timeBadge(item.time)}</div><div><b>${safe(item.title)}</b><p>${safe(item.place)}</p></div><span class="type ${kindClass(item.kind)}">${safe(item.kind)}</span><button class="delete" data-remove-lesson="${item.id}" title="Видалити" aria-label="Видалити пару «${safe(item.title)}»">×</button></article>`).join('');
     if (!lessons.length) showEmpty(board);
   }
 
