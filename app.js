@@ -4,13 +4,18 @@
   const $$ = selector => [...document.querySelectorAll(selector)];
   const days = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд'];
   const fullDays = ['Неділя', 'Понеділок', 'Вівторок', 'Середа', 'Четвер', 'П’ятниця', 'Субота'];
-  const seed = { lessons: [], tasks: [], files: [] };
+  const seed = { lessons: [], tasks: [], files: [], academic: { autumn: [], spring: [] } };
   const clone = value => JSON.parse(JSON.stringify(value));
 
   function load() {
     try {
       const saved = JSON.parse(localStorage.getItem('student-hub-v5'));
       if (!saved || !Array.isArray(saved.lessons) || !Array.isArray(saved.tasks) || !Array.isArray(saved.files)) return clone(seed);
+      // Сумісність зі збереженнями до появи власного (редагованого користувачем) графіка навчального процесу.
+      if (!saved.academic || typeof saved.academic !== 'object') saved.academic = clone(seed.academic);
+      ['autumn', 'spring'].forEach(semester => {
+        if (!Array.isArray(saved.academic[semester])) saved.academic[semester] = [];
+      });
       return saved;
     } catch { return clone(seed); }
   }
@@ -291,7 +296,7 @@
   // Кнопка «+ Додати» в шапці: на сторінках, де є природна дія додавання,
   // веде саме до відповідної форми (пара / завдання / матеріал) замість
   // того, щоб завжди відкривати форму пари. На сторінках без такої дії
-  // (Графік навчання, Автори, Підтримка) кнопку ховаємо — там додавати нічого.
+  // (Графік навчання, Підтримка) кнопку ховаємо — там додавати нічого.
   const topbarAddConfig = {
     home: { modal: 'lesson', label: 'Додати пару' },
     schedule: { modal: 'lesson', label: 'Додати пару' },
@@ -316,7 +321,7 @@
       item.classList.toggle('active', isActive);
       if (isActive) item.setAttribute('aria-current', 'page'); else item.removeAttribute('aria-current');
     });
-    $('#heading').textContent = ({ home: 'Твій навчальний простір', schedule: 'Твій навчальний тиждень', tasks: 'Не пропусти дедлайни', files: 'Твоя база знань', academic: 'Знай терміни наперед', authors: 'Команда проєкту', support: 'Ми тут, щоб допомогти' })[page];
+    $('#heading').textContent = ({ home: 'Твій навчальний простір', schedule: 'Твій навчальний тиждень', tasks: 'Не пропусти дедлайни', files: 'Твоя база знань', academic: 'Знай терміни наперед', support: 'Ми тут, щоб допомогти' })[page];
     updateTopbarAddButton(page);
     setSidebarOpen(false); window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -478,10 +483,135 @@
     try {
       const parsed = JSON.parse(await file.text());
       if (!Array.isArray(parsed.lessons) || !Array.isArray(parsed.tasks) || !Array.isArray(parsed.files)) throw new Error('bad shape');
+      // Сумісність зі старими резервними копіями без графіка навчального процесу.
+      if (!parsed.academic || typeof parsed.academic !== 'object') parsed.academic = clone(seed.academic);
+      ['autumn', 'spring'].forEach(semester => {
+        if (!Array.isArray(parsed.academic[semester])) parsed.academic[semester] = [];
+      });
       if (!confirm('Імпорт замінить поточні дані на дані з файлу. Продовжити?')) return;
       data = parsed; save(); renderAll();
     } catch { alert('Не вдалося прочитати файл — переконайся, що це резервна копія Student Hub.'); }
     event.target.value = '';
+  });
+
+  // --- Автопідбір розкладу з Excel за групою -----------------------------------------------
+  // Розрахований на офіційний шаблон розкладу (як у КНІТ): один аркуш на факультет, рядок 1 —
+  // назви груп починаючи з колонки C, колонка A — день тижня (об'єднані комірки, вертикальний
+  // текст), колонка B — час пари у форматі "08:30_ч" / "08:30_з" (ч = чисельник, з = знаменник).
+  // Після заголовка йде рівно 5 днів × 5 пар × 2 тижні = 50 рядків. Лекція на кілька груп одразу
+  // зберігається як об'єднана комірка на кілька колонок і/або обидва тижневих рядки — це і є
+  // ознака "пара щотижня" замість "лише в чисельнику/знаменнику".
+  const EXCEL_TIME_SLOTS = ['08:30', '10:20', '12:10', '14:30', '16:20'];
+
+  function excelNormalizeKind(raw) {
+    const s = (raw || '').toLowerCase();
+    if (s.includes('лек')) return 'Лекція';
+    if (s.includes('практ')) return 'Практика';
+    if (s.includes('лаборатор')) return 'Лабораторна';
+    const cleaned = (raw || '').trim().replace(/_+$/, '');
+    return cleaned || 'Лекція';
+  }
+  function excelEscapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+  function excelParseSubjectKind(line) {
+    const quoted = [...line.matchAll(/"([^"]*)"/g)].map(m => m[1]).filter(s => s.trim());
+    const kindRaw = quoted.length ? quoted[quoted.length - 1] : '';
+    let subject = line.replace(/"/g, ' ').trim();
+    if (kindRaw) subject = subject.replace(new RegExp('\\s*' + excelEscapeRe(kindRaw) + '\\s*$'), '').trim();
+    return { subject: subject.replace(/\s{2,}/g, ' ').trim(), kind: excelNormalizeKind(kindRaw) };
+  }
+  function excelResolveAnchor(merges, r, c) {
+    for (const m of merges) { if (r >= m.s.r && r <= m.e.r && c >= m.s.c && c <= m.e.c) return { r: m.s.r, c: m.s.c }; }
+    return { r, c };
+  }
+  function excelFindGroups(workbook) {
+    const found = [];
+    workbook.SheetNames.forEach(sheetName => {
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: null, raw: true });
+      const header = rows[0] || [];
+      header.forEach((val, col) => { if (col >= 2 && typeof val === 'string' && val.trim()) found.push({ sheet: sheetName, col, group: val.trim() }); });
+    });
+    return found;
+  }
+  function excelExtractLessons(workbook, sheetName, groupCol) {
+    const sheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true });
+    const merges = sheet['!merges'] || [];
+    const lessons = [];
+    const addLesson = (raw, day, t, week) => {
+      if (!raw || raw === '---') return;
+      const lines = String(raw).split('\n').map(s => s.trim()).filter(Boolean);
+      if (lines.length < 2) return;
+      const room = lines[lines.length - 1];
+      const teacher = lines[lines.length - 2];
+      const subjLine = lines.length >= 3 ? lines[lines.length - 3] : lines[0];
+      const { subject, kind } = excelParseSubjectKind(subjLine);
+      if (!subject) return;
+      lessons.push({ id: uid(), day: day + 1, week, kind, time: EXCEL_TIME_SLOTS[t], place: teacher ? `${room} · ${teacher}` : room, title: subject });
+    };
+    for (let day = 0; day < 5; day++) {
+      const dayStart = 1 + day * 10;
+      for (let t = 0; t < EXCEL_TIME_SLOTS.length; t++) {
+        const rCh = dayStart + t * 2, rZn = rCh + 1;
+        const aCh = excelResolveAnchor(merges, rCh, groupCol), aZn = excelResolveAnchor(merges, rZn, groupCol);
+        const sameCell = aCh.r === aZn.r && aCh.c === aZn.c;
+        const valCh = rows[aCh.r] ? rows[aCh.r][aCh.c] : null;
+        const valZn = rows[aZn.r] ? rows[aZn.r][aZn.c] : null;
+        if (sameCell) addLesson(valCh, day, t, 'both');
+        else { addLesson(valCh, day, t, 'numerator'); addLesson(valZn, day, t, 'denominator'); }
+      }
+    }
+    return lessons;
+  }
+
+  let excelWorkbook = null, excelGroups = [];
+  // Не даємо цій майстер-формі впасти у загальний обробник submit нижче (типи lesson/task/file) —
+  // тут немає кнопки type="submit", але про всяк випадок глушимо подію ще на фазі занурення.
+  $('#entry-form').addEventListener('submit', event => {
+    if ($('#entry-form').dataset.type === 'excelImport') { event.preventDefault(); event.stopImmediatePropagation(); }
+  }, true);
+
+  function renderExcelStep1() {
+    $('#modal-kicker').textContent = 'РОЗКЛАД З EXCEL';
+    $('#modal-title').textContent = 'Імпорт розкладу за групою';
+    $('#entry-form').dataset.type = 'excelImport';
+    $('#entry-form').innerHTML = `<div class="form-grid"><div class="field full"><p style="color:var(--muted);font-size:13px;margin:0 0 10px;line-height:1.5">Обери Excel-файл з розкладом свого факультету. Після завантаження оберемо твою групу зі списку.</p><input type="file" id="excel-step-file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></div><p id="excel-status" style="color:var(--muted);font-size:12px;margin-top:8px"></p></div>`;
+    $('#excel-step-file').addEventListener('change', async event => {
+      const file = event.target.files[0]; if (!file) return;
+      $('#excel-status').textContent = 'Читаю файл…';
+      try {
+        const buf = await file.arrayBuffer();
+        excelWorkbook = XLSX.read(buf, { type: 'array' });
+        excelGroups = excelFindGroups(excelWorkbook);
+        if (!excelGroups.length) { $('#excel-status').textContent = 'Не вдалося знайти групи у файлі — перевір, що це офіційний шаблон розкладу.'; return; }
+        renderExcelStep2();
+      } catch { $('#excel-status').textContent = 'Не вдалося прочитати файл. Переконайся, що це коректний .xlsx.'; }
+    });
+  }
+  function renderExcelStep2() {
+    $('#entry-form').innerHTML = `<div class="form-grid"><div class="field full"><label for="excel-group-select">Твоя група</label><select id="excel-group-select">${excelGroups.map((g, i) => `<option value="${i}">${safe(g.sheet)} — ${safe(g.group)}</option>`).join('')}</select></div><p style="color:var(--muted);font-size:12px;line-height:1.5">Знайдено <b id="excel-count" style="color:var(--text)"></b> пар для обраної групи. Імпорт замінить поточний розклад пар — завдання й матеріали лишаться без змін.</p></div><button type="button" class="primary-button save" id="excel-confirm-btn">Імпортувати розклад →</button>`;
+    const updateCount = () => {
+      const g = excelGroups[Number($('#excel-group-select').value)];
+      const count = excelExtractLessons(excelWorkbook, g.sheet, g.col).length;
+      $('#excel-count').textContent = `${count}`;
+    };
+    $('#excel-group-select').addEventListener('change', updateCount);
+    updateCount();
+    $('#excel-confirm-btn').addEventListener('click', () => {
+      const g = excelGroups[Number($('#excel-group-select').value)];
+      const lessons = excelExtractLessons(excelWorkbook, g.sheet, g.col);
+      if (!lessons.length && !confirm('Для цієї групи не знайдено жодної пари. Все одно очистити поточний розклад?')) return;
+      if (lessons.length && !confirm(`Імпортувати ${lessons.length} пар для групи ${g.group}? Поточний розклад пар буде замінено.`)) return;
+      data.lessons = lessons; save(); closeModal(); renderAll(); showPage('schedule');
+      alert(`Розклад для групи ${g.group} імпортовано: ${lessons.length} пар.`);
+    });
+  }
+  $('#import-excel-btn').addEventListener('click', () => {
+    if (typeof XLSX === 'undefined') { alert('Не вдалося завантажити бібліотеку читання Excel. Перевір інтернет-з’єднання і спробуй ще раз.'); return; }
+    editing = { type: null, id: null };
+    lastFocusedElement = document.activeElement;
+    excelWorkbook = null; excelGroups = [];
+    renderExcelStep1();
+    $('#modal-wrap').classList.add('open'); $('#modal-wrap').setAttribute('aria-hidden', 'false');
   });
 
   // --- Синхронізація розкладу з Google Calendar / Apple Calendar (iCal) / Outlook через .ics ---
@@ -691,35 +821,12 @@
     } catch { /* пошкоджене або чуже посилання — тихо ігноруємо */ }
   }
 
-  // --- Графік навчального процесу (2026/2027 н.р., ННІ КНІТ) ---
+  // --- Графік навчального процесу: власний, редагований графік у готовому макеті таблиці ---
+  const ACADEMIC_VALUE_COLUMNS = 9;
+  const emptyAcademicRow = () => ({ course: '', groups: '', values: Array(ACADEMIC_VALUE_COLUMNS).fill('') });
   const academicColumns = ['Курс', 'Групи', 'Теоретичне навчання', '1-й модульний тиждень', 'Теоретичне навчання', '2-й модульний тиждень', 'Семестровий контроль', 'Канікули', 'Практика', 'Дипломне проектування', 'Атестація (ДЕ, ККЗ, ДР/П, МР)'];
-  const academicSemesters = {
-    autumn: {
-      label: 'Осінній семестр', rows: [
-        { course: '1', groups: 'КН, ІСТ, ІПЗ, КІ, КБ', values: ['01.09.26–25.10.26', '12.10.26–25.10.26', '26.10.26–20.12.26', '07.12.26–20.12.26', '21.12.26–31.12.26', '–', '–', '–', '–'] },
-        { course: '1', groups: 'КНС, ІСТС, ІПЗС, КІС', values: ['01.09.26–25.10.26', '12.10.26–25.10.26', '26.10.26–20.12.26', '07.12.26–20.12.26', '21.12.26–31.12.26', '–', '–', '–', '–'] },
-        { course: '2', groups: 'КН, ІСТ, ІПЗ, КІ', values: ['01.09.26–25.10.26', '12.10.26–25.10.26', '26.10.26–20.12.26', '07.12.26–20.12.26', '21.12.26–31.12.26', '01.07.26–31.08.26', '–', '–', '–'] },
-        { course: '2', groups: 'КНС, ІСТС, ІПЗС, КІС', values: ['01.09.26–25.10.26', '12.10.26–25.10.26', '26.10.26–20.12.26', '07.12.26–20.12.26', '21.12.26–31.12.26', '01.07.26–31.08.26', '–', '–', '–'] },
-        { course: '3', groups: 'КН, ІСТ, ІПЗ, КІ', values: ['01.09.26–25.10.26', '12.10.26–25.10.26', '26.10.26–20.12.26', '07.12.26–20.12.26', '21.12.26–31.12.26', '01.07.26–31.08.26', '–', '–', '–'] },
-        { course: '3', groups: 'КНС, ІСТС, ІПЗС', values: ['01.09.26–25.10.26', '12.10.26–25.10.26', '26.10.26–20.12.26', '07.12.26–20.12.26', '21.12.26–31.12.26', '01.07.26–31.08.26', '–', '–', '–'] },
-        { course: '4', groups: 'КН, ІСТ, ІПЗ', values: ['01.09.26–25.10.26', '12.10.26–25.10.26', '26.10.26–20.12.26', '07.12.26–20.12.26', '21.12.26–31.12.26', '01.07.26–31.08.26', '–', '–', '–'] },
-        { course: '5', groups: 'КН(м)', values: ['01.09.26–25.10.26', '12.10.26–25.10.26', '26.10.26–20.12.26', '07.12.26–20.12.26', '21.12.26–31.12.26', '–', '–', '–', '–'] },
-        { course: '6', groups: 'КН (м)', values: ['–', '–', '–', '–', '–', '01.07.26–31.08.26', '01.09.26–18.10.26', '19.10.26–13.12.26', '14.12.26–31.12.26'] },
-      ]
-    },
-    spring: {
-      label: 'Весняний семестр', rows: [
-        { course: '1', groups: 'КН, ІСТ, ІПЗ, КІ, КБ', values: ['25.01.27–21.03.27', '09.03.27–21.03.27', '22.03.27–16.05.27', '03.05.25–16.05.27', '17.05.27–06.06.27', '01.01.27–24.01.27, 07.06.27–30.06.27', '–', '–', '–'] },
-        { course: '1', groups: 'КНС, ІСТС, ІПЗС, КІС', values: ['25.01.27–21.03.27', '09.03.27–21.03.27', '22.03.27–16.05.27', '03.05.25–16.05.27', '17.05.27–06.06.27', '01.01.27–24.01.27, 07.06.27–30.06.27', '–', '–', '–'] },
-        { course: '2', groups: 'КН, ІСТ, ІПЗ, КІ', values: ['25.01.27–21.03.27', '09.03.27–21.03.27', '22.03.27–16.05.27', '03.05.25–16.05.27', '17.05.27–06.06.27', '01.01.27–24.01.27, 07.06.27–30.06.27', '–', '–', '–'] },
-        { course: '2', groups: 'КНС, ІСТС, ІПЗС, КІС', values: ['25.01.27–21.03.27', '09.03.27–21.03.27', '22.03.27–16.05.27', '03.05.25–16.05.27', '07.06.27–20.06.27', '01.01.27–24.01.27, 21.06.27–30.06.27', '17.05.27–06.06.27 (3 тижні)', '–', '–'] },
-        { course: '3', groups: 'КН, ІСТ, ІПЗ, КІ', values: ['25.01.27–21.03.27', '09.03.27–21.03.27', '22.03.27–16.05.27', '03.05.25–16.05.27', '07.06.27–20.06.27', '01.01.27–24.01.27, 21.06.27–30.06.27', '17.05.27–06.06.27 (3 тижні)', '–', '–'] },
-        { course: '3', groups: 'КНС, ІСТС, ІПЗС', values: ['25.01.27–07.03.27', '01.03.27–07.03.27', '08.03.27–18.04.27', '12.04.27–18.04.27', '24.05.27–06.06.27', '01.01.27–24.01.27', '19.04.27–16.05.27, 17.05.27–23.05.27, 07.06.27–13.06.27 (4 тижні)', '–', '14.06.27–30.06.27'] },
-        { course: '4', groups: 'КН, ІСТ, ІПЗ', values: ['25.01.27–07.03.27', '01.03.27–07.03.27', '08.03.27–18.04.27', '12.04.27–18.04.27', '24.05.27–06.06.27', '01.01.27–24.01.27', '19.04.27–16.05.27, 17.05.27–23.05.27, 07.06.27–13.06.27 (4 тижні)', '–', '14.06.27–30.06.27'] },
-        { course: '5', groups: 'КН(м)', values: ['25.01.27–21.03.27', '09.03.27–21.03.27', '22.03.27–16.05.27', '03.05.25–16.05.27', '17.05.27–06.06.27', '01.01.27–24.01.27, 21.06.27–30.06.27', '–', '11.01.27–24.01.27, 07.06.27–20.06.27', '–'] },
-      ]
-    }
-  };
+  const academicSemesterLabels = { autumn: 'Осінній семестр', spring: 'Весняний семестр' };
+
   function renderAcademic() {
     const root = $('#academic-content');
     if (!root) return;
@@ -728,18 +835,54 @@
       button.classList.toggle('active', on);
       button.setAttribute('aria-pressed', String(on));
     });
-    const semester = academicSemesters[selectedSemester];
-    if (!semester) return;
-    // Курс виводиться одним об'єднаним рядком (rowspan), якщо кілька груп курсу мають однаковий графік підряд.
-    let bodyRows = '';
-    for (let i = 0; i < semester.rows.length; i++) {
-      const row = semester.rows[i];
-      const isFirstOfCourse = i === 0 || semester.rows[i - 1].course !== row.course;
-      let span = 1;
-      if (isFirstOfCourse) { while (semester.rows[i + span] && semester.rows[i + span].course === row.course) span++; }
-      bodyRows += `<tr>${isFirstOfCourse ? `<td class="course-cell" rowspan="${span}">${safe(row.course)}</td>` : ''}<td class="groups-cell">${safe(row.groups)}</td>${row.values.map(value => `<td>${safe(value)}</td>`).join('')}</tr>`;
-    }
-    root.innerHTML = `<article class="panel academic-table-wrap"><div class="panel-title"><div><p class="micro">${selectedSemester === 'autumn' ? 'СЕМЕСТР I' : 'СЕМЕСТР II'}</p><h3>${safe(semester.label)}</h3></div></div><div class="academic-scroll"><table class="academic-table"><thead><tr>${academicColumns.map(column => `<th>${safe(column)}</th>`).join('')}</tr></thead><tbody>${bodyRows}</tbody></table></div></article>`;
+    const rows = data.academic[selectedSemester] || [];
+    const bodyRows = rows.map((row, rowIndex) => `<tr>
+      <td class="course-cell"><input class="academic-input academic-course-input" data-row="${rowIndex}" data-field="course" value="${safe(row.course)}" placeholder="—" aria-label="Курс"></td>
+      <td class="groups-cell"><input class="academic-input" data-row="${rowIndex}" data-field="groups" value="${safe(row.groups)}" placeholder="Групи" aria-label="Групи"></td>
+      ${row.values.map((value, valueIndex) => `<td><input class="academic-input" data-row="${rowIndex}" data-value-index="${valueIndex}" value="${safe(value)}" placeholder="—" aria-label="${safe(academicColumns[valueIndex + 2])}"></td>`).join('')}
+      <td class="academic-row-actions"><button type="button" class="delete academic-row-delete" data-row="${rowIndex}" title="Видалити рядок" aria-label="Видалити рядок">×</button></td>
+    </tr>`).join('');
+    root.innerHTML = `<article class="panel academic-table-wrap">
+      <div class="panel-title">
+        <div><p class="micro">${selectedSemester === 'autumn' ? 'СЕМЕСТР I' : 'СЕМЕСТР II'}</p><h3>${safe(academicSemesterLabels[selectedSemester])}</h3></div>
+        <div class="academic-actions">
+          <button type="button" class="link-button academic-add-row">+ Додати рядок</button>
+          <button type="button" class="link-button academic-clear-semester">Очистити семестр</button>
+        </div>
+      </div>
+      <div class="academic-scroll"><table class="academic-table"><thead><tr>${academicColumns.map(column => `<th>${safe(column)}</th>`).join('')}<th class="academic-th-actions"></th></tr></thead><tbody>${bodyRows}</tbody></table></div>
+      ${!rows.length ? '<p class="hint academic-empty-hint">Рядків ще немає — натисни «+ Додати рядок», щоб почати вписувати свій графік.</p>' : ''}
+    </article>`;
+
+    root.querySelectorAll('.academic-input').forEach(input => {
+      input.addEventListener('change', () => {
+        const row = data.academic[selectedSemester][Number(input.dataset.row)];
+        if (!row) return;
+        if (input.dataset.field === 'course') row.course = input.value;
+        else if (input.dataset.field === 'groups') row.groups = input.value;
+        else row.values[Number(input.dataset.valueIndex)] = input.value;
+        save();
+      });
+    });
+    root.querySelector('.academic-add-row').addEventListener('click', () => {
+      data.academic[selectedSemester].push(emptyAcademicRow());
+      save();
+      renderAcademic();
+    });
+    root.querySelectorAll('.academic-row-delete').forEach(button => {
+      button.addEventListener('click', () => {
+        data.academic[selectedSemester].splice(Number(button.dataset.row), 1);
+        save();
+        renderAcademic();
+      });
+    });
+    root.querySelector('.academic-clear-semester').addEventListener('click', () => {
+      if (!rows.length) return;
+      if (!confirm(`Очистити всі рядки за «${academicSemesterLabels[selectedSemester]}»?`)) return;
+      data.academic[selectedSemester] = [];
+      save();
+      renderAcademic();
+    });
   }
 
   if ('serviceWorker' in navigator) {
