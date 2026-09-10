@@ -1,4 +1,4 @@
-const CACHE_NAME = 'student-hub-v15';
+const CACHE_NAME = 'student-hub-v16';
 const ASSETS = [
   './',
   './index.html',
@@ -9,7 +9,6 @@ const ASSETS = [
   './design-refresh.css',
   './app.js',
   './manifest.json',
-  './logo_kn.jpg',
   './icon-192.png',
   './icon-512.png'
 ];
